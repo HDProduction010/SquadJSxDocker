@@ -1,0 +1,62 @@
+# Use an official Node.js runtime as a parent image for the build stage
+FROM node:18 AS build
+
+# Set the working directory inside the container
+WORKDIR /usr/src/app
+
+# Install necessary tools
+RUN apt-get update && apt-get install -y curl jq git
+
+# Copy package.json and package-lock.json to the working directory
+COPY package.json ./
+# Copy the rest of the application code to the working directory
+COPY . .
+
+# Install dependencies using npm with workspaces
+RUN npm install --legacy-peer-deps
+
+# Use a second stage to build the final image
+FROM node:18
+
+# Set the working directory inside the container
+WORKDIR /usr/src/app
+
+# Install necessary tools
+RUN apt-get update && apt-get install -y curl jq git
+
+# Copy the node_modules and other files from the build stage
+COPY --from=build /usr/src/app /usr/src/app
+
+# Copy config.json if it exists in the build context
+COPY config.json ./config.json.bak
+
+# Command to check for new GitHub releases and pull updates if a new version is released
+RUN curl -s https://api.github.com/repos/Team-Silver-Sphere/SquadJS/releases/latest | jq -r '.tag_name' > latest_version && \
+    if [ -f current_version ]; then \
+        if ! cmp -s latest_version current_version; then \
+            echo "New version found, updating repository..." && \
+            mv config.json config.json.d && \
+            find . -mindepth 1 -maxdepth 1 ! -name 'config.json.d' ! -name 'latest_version' -exec rm -rf {} + && \
+            git clone -b $(cat latest_version) --single-branch https://github.com/Team-Silver-Sphere/SquadJS.git repo && \
+            cp -r repo/* . && \
+            rm -rf repo && \
+            echo $(cat latest_version) > current_version && \
+            mv config.json.d config.json && \
+            npm install --legacy-peer-deps; \
+        else \
+            echo "No new version found, running normally."; \
+        fi; \
+    else \
+        echo "No current version found, initializing repository..." && \
+        mv config.json config.json.d && \
+        find . -mindepth 1 -maxdepth 1 ! -name 'config.json.d' ! -name 'latest_version' -exec rm -rf {} + && \
+        git clone -b $(cat latest_version) --single-branch https://github.com/Team-Silver-Sphere/SquadJS.git repo && \
+        cp -r repo/* . && \
+        rm -rf repo && \
+        echo $(cat latest_version) > current_version && \
+        mv config.json.d config.json && \
+        npm install --legacy-peer-deps; \
+    fi
+
+# Start the application
+CMD ["node", "--unhandled-rejections=warn", "index.js"]
